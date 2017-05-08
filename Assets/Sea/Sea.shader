@@ -3,7 +3,7 @@
 	Properties
 	{
 		_MainTex ("Texture", 2D) = "white" {}
-		_IterFragment("Frag Step", Range(1, 10)) = 5
+		_IterFragment("Frag Step", Int) = 5
 		_SeaHeight("Height", Range(0.01, 10)) = 0.6
 		_SeaChoppy("Choppy", Range(0.01, 10)) = 4
 		_SeaSpeed("Speed", Range(0.01, 10)) = 0.8
@@ -52,8 +52,8 @@
 			float _SeaNumSteps;
 
 			float hash(float2 p);
-			float mix(float x, float y , float a);
 			float map_detailed(float3 p);
+			float map_detailed2(float3 p);
 			float sea_octave(float2 uv, float choppy);
 			float heightMapTracing(float3 ori, float3 dir, out float3 p);
 			float3 getNormal(float3 p, float eps);
@@ -66,14 +66,14 @@
 			{
 				float tm = 0.0;
 				float tx = 1000.0;
-				float hx = map_detailed(ori + dir * tx);
+				float hx = map_detailed2(ori + dir * tx);
 				if (hx > 0.0) return tx;
-				float hm = map_detailed(ori + dir * tm);
+				float hm = map_detailed2(ori + dir * tm);
 				float tmid = 0.0;
-				for (int i = 0; i < _SeaNumSteps; i++) {
-					tmid = mix(tm, tx, hm / (hm - hx));
+				for (int i = 0; i < 8; i++) {
+					tmid = lerp(tm, tx, hm / (hm - hx));
 					p = ori + dir * tmid;
-					float hmid = map_detailed(p);
+					float hmid = map_detailed2(p);
 					if (hmid < 0.0) {
 						tx = tmid;
 						hx = hmid;
@@ -91,16 +91,12 @@
 				float2 i = floor(p);
 				float2 f = frac(p);
 				float2 u = f*f*(3.0 - 2.0*f);
-				return -1.0 + 2.0*mix(
-					mix(hash(i + float2(0.0, 0.0)),
+				return -1.0 + 2.0*lerp(
+					lerp(hash(i + float2(0.0, 0.0)),
 						hash(i + float2(1.0, 0.0)), u.x),
-					mix(hash(i + float2(0.0, 1.0)),
+					lerp(hash(i + float2(0.0, 1.0)),
 						hash(i + float2(1.0, 1.0)), u.x), u.y
 					);
-			}
-			float mix(float x, float y , float a)
-			{
-				return x*(1 - a) + y * a;
 			}
 			float3 getNormal(float3 p, float eps) 
 			{
@@ -111,7 +107,7 @@
 				n.y = eps;
 				return normalize(n);
 			}
-			float map_detailed(float3 p) 
+			float map_detailed(float3 p)
 			{
 				float freq = _SeaFreq;
 				float amp = _SeaHeight;
@@ -119,25 +115,50 @@
 				float2 uv = p.xz;
 				uv.x *= 0.75;
 
-				float d, h = 0.0;
-				for (int i = 0; i < _IterFragment; i++)
+				float d = 0.0;
+				float h = 0.0;
+				for (int i = 0; i < 5; i++)
 				{
-					d = sea_octave((uv + _Time * _SeaSpeed)*freq, choppy);
-					d += sea_octave((uv - _Time * _SeaSpeed)*freq, choppy);
+					d = sea_octave((uv + _Time.y * _SeaSpeed)*freq, choppy);
+					d += sea_octave((uv - _Time.y * _SeaSpeed)*freq, choppy);
 					h += d * amp;
-					uv = mul(uv,float2x2(1.6, 1.2, -1.2, 1.6));
-					freq *= 1.9; 
+					uv = mul(uv, float2x2(1.6, 1.2, -1.2, 1.6));
+					freq *= 1.9;
 					amp *= 0.22;
-					choppy = mix(choppy, 1.0, 0.2);
+					choppy = lerp(choppy, 1.0, 0.2);
 				}
 				return p.y - h;
 			}
+			float map_detailed2(float3 p)
+			{
+				float freq = _SeaFreq;
+				float amp = _SeaHeight;
+				float choppy = _SeaChoppy;
+				float2 uv = p.xz;
+				uv.x *= 0.75;
+
+				float d = 0.0;
+				float h = 0.0;
+				for (int i = 0; i < 3; i++)
+				{
+					d = sea_octave((uv + _Time.y * _SeaSpeed)*freq, choppy);
+					d += sea_octave((uv - _Time.y * _SeaSpeed)*freq, choppy);
+					h += d * amp;
+					uv = mul(uv, float2x2(1.6, 1.2, -1.2, 1.6));
+					freq *= 1.9;
+					amp *= 0.22;
+					choppy = lerp(choppy, 1.0, 0.2);
+				}
+				return p.y - h;
+			}
+			
+
 			float sea_octave(float2 uv, float choppy) 
 			{
 				uv += noise(uv);
 				float2 wv = 1.0 - abs(sin(uv));
 				float2 swv = abs(cos(uv));
-				wv = mix(wv, swv, wv);
+				wv = lerp(wv, swv, wv);
 				return pow(1.0 - pow(wv.x * wv.y, 0.65), choppy);
 			}
 			float hash(float2 p) 
@@ -163,12 +184,12 @@
 				fresnel = pow(fresnel, 3.0) * 0.65;
 
 				float3 reflected = getSkyColor(reflect(eye, n));
-				float3 refracted = _SeaBase + diffuse(n, l, 80.0) * _SeaWaterColor * 0.12;
+				float3 refracted = _SeaBase.xyz + diffuse(n, l, 80.0) * _SeaWaterColor.xyz * 0.12;
 
-				float3 color = mix(refracted, reflected, fresnel);
+				float3 color = lerp(refracted, reflected, fresnel);
 
 				float atten = max(1.0 - dot(dist, dist) * 0.001, 0.0);
-				color += _SeaWaterColor * (p.y - _SeaHeight) * 0.18 * atten;
+				color += _SeaWaterColor.xyz * (p.y - _SeaHeight) * 0.18 * atten;
 
 				float spec = specular(n, l, eye, 60.0);
 
@@ -186,37 +207,36 @@
 			v2f vert(appdata v)
 			{
 				v2f o;
-				o.vertex = UnityObjectToClipPos(v.vertex);
-				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
-				UNITY_TRANSFER_FOG(o, o.vertex);
+				o.vertex = mul(UNITY_MATRIX_MVP, v.vertex);
+				o.uv = ComputeScreenPos(o.vertex);
 
+				o.uv = o.uv - 3.0;
+				o.uv.x *= _ScreenParams.x / _ScreenParams.y;
 				return o;
 			}
 
 			fixed4 frag(v2f i) : SV_Target
 			{
-				// sample the texture
-				fixed4 col = tex2D(_MainTex, i.uv);
-				// apply fog
-				UNITY_APPLY_FOG(i.fogCoord, col);
-
-				float3 ori = float3(0.0, 3.5, _Time.x*5.0);
+				fixed4 col;
+				
+				float3 ori = float3(0.0, 3.5, 0);
 				float3 dir = normalize(float3(i.uv.xy, -2.0));
 				dir.z += length(i.uv) * 0.15;
-				dir = normalize(dir);
+				//dir = normalize(dir);
 
-				float3 p;
-				heightMapTracing(ori, dir, p);
+				float3 p = float3(0,0,0);
+				float x = heightMapTracing(ori, dir, p);
 				float3 dist = p - ori;
-				float3 n = getNormal(p, dot(dist, dist) * 0.1);
+				float3 n = getNormal(p, dot(dist, dist) * 0.1/ _ScreenParams.x);
 				float3 light = normalize(float3(0.0, 1.0, 0.8));
 
-				float3 color = mix(
+				float3 color = lerp(
 					getSkyColor(dir),
 					getSeaColor(p, n, light, dir, dist),
 					pow(smoothstep(0.0, -0.05, dir.y), 0.3));
 
-				col = float4(color, 1.0);//float4(pow(color, float3(0.75, 0.75, 0.75)), 1.0);
+				col = fixed4(pow(color, float3(0.75, 0.75, 0.75)), 1.0);
+
 				return col;
 			}
 			ENDCG
