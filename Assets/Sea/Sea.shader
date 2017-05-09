@@ -11,6 +11,7 @@
 		_SeaBase("Base", Vector) = (0.1,0.19,0.22)
 		_SeaWaterColor("Water Color", Vector) = (0.8,0.9,0.6)
 		_SeaNumSteps("Step", Range(1,10)) = 8
+		_SeaDirection("Direction",Vector) = (1,1,1)
 	}
 	SubShader
 	{
@@ -37,6 +38,9 @@
 				float2 uv : TEXCOORD0;
 				UNITY_FOG_COORDS(1)
 				float4 vertex : SV_POSITION;
+				float4 pos : TEXCOORD1;
+				float4 viewVector : TEXCOORD2;
+				float4 normal:NORMAL;
 			};
 
 			sampler2D _MainTex;
@@ -49,42 +53,19 @@
 			float _SeaFreq;
 			float4 _SeaBase;
 			float4 _SeaWaterColor;
+			float3 _SeaDirection;
 			float _SeaNumSteps;
+			int _SeaVertexNum;
 
 			float hash(float2 p);
-			float map_detailed(float3 p);
-			float map_detailed2(float3 p);
-			float sea_octave(float2 uv, float choppy);
-			float heightMapTracing(float3 ori, float3 dir, out float3 p);
+			float SeaWave(float3 p);
+			float SineWave(float2 uv, float choppy);
 			float3 getNormal(float3 p, float eps);
 			float3 getSeaColor(float3 p, float3 n, float3 l, float3 eye, float3 dist);
 			float3 getSkyColor(float3 e);
 			float diffuse(float3 n, float3 l, float p);
 			float specular(float3 n, float3 l, float3 e, float s);
-
-			float heightMapTracing(float3 ori, float3 dir, out float3 p)
-			{
-				float tm = 0.0;
-				float tx = 1000.0;
-				float hx = map_detailed2(ori + dir * tx);
-				if (hx > 0.0) return tx;
-				float hm = map_detailed2(ori + dir * tm);
-				float tmid = 0.0;
-				for (int i = 0; i < 8; i++) {
-					tmid = lerp(tm, tx, hm / (hm - hx));
-					p = ori + dir * tmid;
-					float hmid = map_detailed2(p);
-					if (hmid < 0.0) {
-						tx = tmid;
-						hx = hmid;
-					}
-					else {
-						tm = tmid;
-						hm = hmid;
-					}
-				}
-				return tmid;
-			}
+			float3 Gerstner(float3 p, float3 direction, float lambda);
 
 			float noise(in float2 p) 
 			{
@@ -100,14 +81,14 @@
 			}
 			float3 getNormal(float3 p, float eps) 
 			{
-				float3 n;
-				n.y = map_detailed(p);
-				n.x = map_detailed(float3(p.x + eps, p.y, p.z)) - n.y;
-				n.z = map_detailed(float3(p.x, p.y, p.z + eps)) - n.y;
-				n.y = eps;
+				float3 n = float3(0,0,0);
+				//n.y = map_detailed(p);
+				//n.x = map_detailed(float3(p.x + eps, p.y, p.z)) - n.y;
+				//n.z = map_detailed(float3(p.x, p.y, p.z + eps)) - n.y;
+				//n.y = eps;
 				return normalize(n);
 			}
-			float map_detailed(float3 p)
+			float SeaWave(float3 p)
 			{
 				float freq = _SeaFreq;
 				float amp = _SeaHeight;
@@ -119,47 +100,22 @@
 				float h = 0.0;
 				for (int i = 0; i < 5; i++)
 				{
-					d = sea_octave((uv + _Time.y * _SeaSpeed)*freq, choppy);
-					d += sea_octave((uv - _Time.y * _SeaSpeed)*freq, choppy);
-					h += d * amp;
-					uv = mul(uv, float2x2(1.6, 1.2, -1.2, 1.6));
-					freq *= 1.9;
-					amp *= 0.22;
-					choppy = lerp(choppy, 1.0, 0.2);
+					d = SineWave((uv + _Time.y * _SeaSpeed)*freq, choppy);
+					d += SineWave((uv - _Time.y * _SeaSpeed)*freq, choppy);
+					h += d * amp;									//累加多个波的效果
+					uv = mul(uv, float2x2(1.6, 1.2, -1.2, 1.6));	//(x,z) => (1.6x-1.2z, 1.2x + 1.6z)
+					freq *= 1.9;									//正弦波频率递增
+					amp *= 0.22;									//波对顶点y轴的影响递减
+					choppy = lerp(choppy, 1.0, 0.2);				//起伏权值递减
 				}
 				return p.y - h;
 			}
-			float map_detailed2(float3 p)
-			{
-				float freq = _SeaFreq;
-				float amp = _SeaHeight;
-				float choppy = _SeaChoppy;
-				float2 uv = p.xz;
-				uv.x *= 0.75;
 
-				float d = 0.0;
-				float h = 0.0;
-				for (int i = 0; i < 3; i++)
-				{
-					d = sea_octave((uv + _Time.y * _SeaSpeed)*freq, choppy);
-					d += sea_octave((uv - _Time.y * _SeaSpeed)*freq, choppy);
-					h += d * amp;
-					uv = mul(uv, float2x2(1.6, 1.2, -1.2, 1.6));
-					freq *= 1.9;
-					amp *= 0.22;
-					choppy = lerp(choppy, 1.0, 0.2);
-				}
-				return p.y - h;
-			}
-			
-
-			float sea_octave(float2 uv, float choppy) 
+			float SineWave(float2 uv, float choppy)
 			{
 				uv += noise(uv);
-				float2 wv = 1.0 - abs(sin(uv));
-				float2 swv = abs(cos(uv));
-				wv = lerp(wv, swv, wv);
-				return pow(1.0 - pow(wv.x * wv.y, 0.65), choppy);
+				uv = sin(uv) * 0.5 + 0.5;
+				return pow(1.0 - pow(uv.x * uv.y, 0.66), choppy);
 			}
 			float hash(float2 p) 
 			{
@@ -207,37 +163,17 @@
 			v2f vert(appdata v)
 			{
 				v2f o;
+				float h = SeaWave(v.vertex.xyz);
+				v.vertex.y += h;
 				o.vertex = mul(UNITY_MATRIX_MVP, v.vertex);
-				o.uv = ComputeScreenPos(o.vertex);
-
-				o.uv = o.uv - 3.0;
-				o.uv.x *= _ScreenParams.x / _ScreenParams.y;
+				o.pos = v.vertex;
+				o.viewVector.xyz = _WorldSpaceCameraPos.xyz - v.vertex.xyz;
 				return o;
 			}
 
 			fixed4 frag(v2f i) : SV_Target
 			{
-				fixed4 col;
-				
-				float3 ori = float3(0.0, 3.5, 0);
-				float3 dir = normalize(float3(i.uv.xy, -2.0));
-				dir.z += length(i.uv) * 0.15;
-				//dir = normalize(dir);
-
-				float3 p = float3(0,0,0);
-				float x = heightMapTracing(ori, dir, p);
-				float3 dist = p - ori;
-				float3 n = getNormal(p, dot(dist, dist) * 0.1/ _ScreenParams.x);
-				float3 light = normalize(float3(0.0, 1.0, 0.8));
-
-				float3 color = lerp(
-					getSkyColor(dir),
-					getSeaColor(p, n, light, dir, dist),
-					pow(smoothstep(0.0, -0.05, dir.y), 0.3));
-
-				col = fixed4(pow(color, float3(0.75, 0.75, 0.75)), 1.0);
-
-				return col;
+				return fixed4(i.pos.y + 2*float4(0,0.6,0.8,0));
 			}
 			ENDCG
 		}
